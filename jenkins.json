@@ -1,0 +1,242 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : " provision Jenkins instance",
+
+  "Parameters" : {
+
+	"ApplicationName" : {
+	  "Type" : "String",
+	  "Default" : "jenkins"
+	},
+
+	"HostedZone" : {
+	  "Type" : "String",
+	  "Default" : "devops-world.com"
+	},
+
+    "JenkinsVersion" : {
+      "Type" : "String",
+      "Default" : "latest"
+    },
+
+	"SGID" : {
+	  "Type" : "String",
+	  "Default" : "sg-ej7sga4"
+	},
+
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "String",
+      "Default" : "dev",
+      "MinLength": "1",
+      "MaxLength": "64",
+      "AllowedPattern" : "[-_ a-zA-Z0-9]*",
+      "ConstraintDescription" : "can contain only alphanumeric characters, spaces, dashes and underscores."
+    },
+
+    "InstanceType" : {
+      "Description" : "jenkins EC2 instance type",
+      "Type" : "String",
+      "Default" : "t1.micro",
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    }
+  },
+
+  "Mappings" : {
+    "AWSInstanceType2Arch" : {
+      "t1.micro"    : { "Arch" : "64" },
+      "m1.small"    : { "Arch" : "64" },
+      "m1.medium"   : { "Arch" : "64" },
+      "m1.large"    : { "Arch" : "64" },
+      "m1.xlarge"   : { "Arch" : "64" },
+      "m2.xlarge"   : { "Arch" : "64" },
+      "m2.2xlarge"  : { "Arch" : "64" },
+      "m2.4xlarge"  : { "Arch" : "64" },
+      "m3.xlarge"   : { "Arch" : "64" },
+      "m3.2xlarge"  : { "Arch" : "64" },
+      "c1.medium"   : { "Arch" : "64" },
+      "c1.xlarge"   : { "Arch" : "64" },
+      "cc1.4xlarge" : { "Arch" : "64HVM" },
+      "cc2.8xlarge" : { "Arch" : "64HVM" },
+      "cg1.4xlarge" : { "Arch" : "64HVM" }
+    },
+
+    "AWSRegionArch2AMI" : {
+      "us-east-1"      : { "32" : "ami-a0cd60c9", "64" : "ami-aecd60c7", "64HVM" : "ami-a8cd60c1" },
+      "us-west-2"      : { "32" : "ami-46da5576", "64" : "ami-48da5578", "64HVM" : "NOT_YET_SUPPORTED" },
+      "us-west-1"      : { "32" : "ami-7d4c6938", "64" : "ami-734c6936", "64HVM" : "NOT_YET_SUPPORTED" },
+      "eu-west-1"      : { "32" : "ami-61555115", "64" : "ami-6d555119", "64HVM" : "ami-67555113" },
+      "ap-southeast-1" : { "32" : "ami-220b4a70", "64" : "ami-3c0b4a6e", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-southeast-2" : { "32" : "ami-b3990e89", "64" : "ami-bd990e87", "64HVM" : "NOT_YET_SUPPORTED" },
+      "ap-northeast-1" : { "32" : "ami-2a19aa2b", "64" : "ami-2819aa29", "64HVM" : "NOT_YET_SUPPORTED" },
+      "sa-east-1"      : { "32" : "ami-f836e8e5", "64" : "ami-fe36e8e3", "64HVM" : "NOT_YET_SUPPORTED" }
+    }
+  },
+
+  "Resources" : {
+
+    "CfnUser" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "root",
+          "PolicyDocument": { "Statement":[{
+            "Effect":"Allow",
+            "Action":"*",
+            "Resource":"*"
+          }
+        ]}
+       }]
+      }
+    },
+
+    "HostKeys" : {
+      "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+        "UserName" : { "Ref": "CfnUser" }
+      }
+    },
+
+	"jenkinsDNS" : {
+      "Type" : "AWS::Route53::RecordSetGroup",
+	  "Properties" : {
+	    "HostedZoneName" : { "Fn::Join" : [ "", [ {"Ref" : "HostedZone"}, "." ]]},
+	    "RecordSets" : [
+		  {
+			"Name" : { "Fn::Join" : ["", [ { "Ref" : "ApplicationName" }, ".", { "Ref" : "HostedZone" }, "." ]]},
+			"Type" : "A",
+			"TTL"  : "900",
+			"ResourceRecords" : [ { "Ref" : "IPAddress" } ]
+		  }]
+	  }
+	},
+
+    "WebServer": {
+      "Type": "AWS::EC2::Instance",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "packages" : {
+              "yum" : {
+                "tomcat7"       : [],
+                "subversion"    : [],
+				"gcc"		   : [],
+				"libxslt-devel" : [],
+				"ruby-devel"	: [],
+				"httpd"	 	: []
+              }
+            },
+
+            "files" : {
+              "/usr/share/tomcat7/webapps/jenkins.war" : {
+                "source" : { "Fn::Join" : ["", [ "http://mirrors.jenkins-ci.org/war/", { "Ref" : "JenkinsVersion" }, "/jenkins.war" ] ] },
+                "mode" : "000700",
+                "owner" : "tomcat",
+                "group" : "tomcat"
+              },
+
+			  "/etc/httpd/conf/httpd.conf2" : {
+				"content" : { "Fn::Join" : ["", [
+				  "NameVirtualHost *:80\n",
+				   "<VirtualHost *:80>\n",
+				    "ProxyPass         /jenkins  http://127.0.0.1:8080/jenkins\n",
+				    "ProxyPassReverse  /jenkins  http://127.0.0.1:8080/jenkins\n",
+				    "ProxyRequests     Off\n",
+
+				    "<Proxy http://127.0.0.1:8080/jenkins*>\n",
+				      "Order deny,allow\n",
+					  "Allow from all\n",
+					"</Proxy>\n",
+					"RewriteEngine On\n",
+					"RewriteRule   ^/$ http://127.0.0.1:8080/jenkins$1 [NC,P]\n",
+				   "</VirtualHost>"
+                  ]]},
+				"mode"   : "000544",
+                "owner"  : "root",
+                "group"  : "root"
+			  }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" },
+                          { "Fn::FindInMap" : [ "AWSInstanceType2Arch", { "Ref" : "InstanceType" }, "Arch" ] } ] },
+        "InstanceType"   : { "Ref" : "InstanceType" },
+        "SecurityGroups" : [ {"Ref" : "FrontendGroup"} ],
+		"SecurityGroupIds" : [ { "Ref" : "SGID" } ],
+        "KeyName"        : { "Ref" : "KeyName" },
+		"Tags": [ { "Key": "Name", "Value": "jenkins" } ],
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -v\n",
+          "yum -y install java-1.7.0-openjdk*\n",
+          "yum update -y aws-cfn-bootstrap\n",
+
+          "# Install packages\n",
+          "/opt/aws/bin/cfn-init -s ", { "Ref" : "AWS::StackName" }, " -r WebServer ",
+          "    --access-key ",  { "Ref" : "HostKeys" },
+          "    --secret-key ", {"Fn::GetAtt": ["HostKeys", "SecretAccessKey"]},
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+		  "cat /etc/httpd/conf/httpd.conf2 >> /etc/httpd/conf/httpd.conf\n",
+
+          "# mkdir /usr/share/tomcat7/sonatype-work\n",
+          "# chown tomcat.tomcat /usr/share/tomcat7/sonatype-work\n",
+
+		  "service tomcat7 restart\n",
+		  "service httpd restart\n",
+
+          "/opt/aws/bin/cfn-signal", " -e 0", " '", { "Ref" : "WaitHandle" }, "'"
+        ]]}}
+      }
+    },
+
+    "IPAddress" : {
+      "Type" : "AWS::EC2::EIP"
+    },
+
+    "IPAssoc" : {
+      "Type" : "AWS::EC2::EIPAssociation",
+      "Properties" : {
+        "InstanceId" : { "Ref" : "WebServer" },
+        "EIP" : { "Ref" : "IPAddress" }
+       }
+    },
+
+    "FrontendGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "Enable SSH and access to Apache and Tomcat",
+        "SecurityGroupIngress" : [
+          {"IpProtocol" : "tcp", "FromPort" : "22", "ToPort" : "22", "CidrIp" : "0.0.0.0/0"},
+		  {"IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "0.0.0.0/0"}
+        ]
+      }
+    },
+
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+
+    "WaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "WebServer",
+      "Properties" : {
+        "Handle" : { "Ref" : "WaitHandle" },
+        "Timeout" : "990"
+      }
+    }
+  },
+
+  "Outputs" : {
+    "JenkinsURL" : {
+      "Value" : { "Fn::Join" : ["", ["http://", { "Ref" : "ApplicationName" }, ".", { "Ref" : "HostedZone" }, "/jenkins"]] },
+      "Description" : "URL for newly created Jenkins repository"
+    },
+    "InstanceIPAddress" : {
+      "Value" : { "Ref" : "IPAddress" }
+    }
+  }
+}
